@@ -55,6 +55,23 @@ pnpm scan --json    # 完整 JSON
   - 切换默认 npm 时会先展示将修改的文件，确认后才写入，并保留带时间戳的备份。
 - **界面**：深/浅色主题、搜索、仅看可更新、排序、桌面与移动端自适应。
 
+## 桌面 App（macOS）
+
+```bash
+pnpm app:build
+rm -rf /Applications/npm-atlas.app
+ditto dist-app/mac-arm64/npm-atlas.app /Applications/npm-atlas.app
+open /Applications/npm-atlas.app
+```
+
+- 替换已安装版本前请先退出正在运行的 App。
+
+- App 内嵌现有服务端，用随机本机端口启动，并在原生窗口中打开界面。
+- 从 Finder 启动时会读取登录 shell 的 PATH，因此能识别 mise / nvm / Homebrew 等安装；默认 npm 以登录 shell 的解析结果为准。
+- 产物为未公证的本地 ad-hoc 签名 App，仅用于本机；首次从 Finder 打开如被拦截，可右键「打开」。
+- `pnpm app:dev` 可用本机 `pnpm dev` 的 Vite 页面调试桌面外壳。
+- 若 Electron 二进制未下载，可先执行 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ pnpm exec install-electron`。
+
 ## 脚本
 
 | 命令 | 作用 |
@@ -64,6 +81,8 @@ pnpm scan --json    # 完整 JSON
 | `pnpm typecheck` | TypeScript 类型检查 |
 | `pnpm build` | 构建前端 + 打包服务端到 `dist/` |
 | `pnpm start` | 运行生产构建（单进程托管静态页面与 API） |
+| `pnpm app:build` | 构建 macOS `.app` 到 `dist-app/mac-arm64/` |
+| `pnpm app:dev` | 调试 Electron 外壳（需先运行 `pnpm dev`） |
 
 环境变量：`ATLAS_PORT`（默认 4317）、`ATLAS_HOST`（默认 127.0.0.1）。
 
@@ -99,6 +118,9 @@ server (Hono)
 
 ```
 bin/npm-atlas.mjs     启动入口（构建后）
+electron/main.mjs     macOS 桌面外壳（内嵌服务端）
+scripts/build-app-server.ts  打包用单文件服务端 bundle
+electron-builder.yml  桌面 App 打包配置
 server/scanner.ts     发现、探测、解析、缓存
 server/executor.ts    更新/卸载与安全校验
 server/defaultNpm.ts  默认 npm 包装器、shell 集成与恢复

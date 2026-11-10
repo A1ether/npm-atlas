@@ -1,0 +1,24 @@
+appId: dev.npmatlas.app
+productName: npm-atlas
+copyright: Copyright © 2026 npm-atlas contributors
+
+directories:
+  output: dist-app
+  buildResources: build
+
+files:
+  - electron/**/*
+  - dist/server/app.js
+  - dist/web/**/*
+  - package.json
+  - "!node_modules/**/*"
+
+asar: false
+npmRebuild: false
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false

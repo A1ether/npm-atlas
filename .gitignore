@@ -7,3 +7,8 @@ dist/
 .vite/
 # Playwright MCP test artifacts
 .playwright-mcp/
+
+# Desktop app build output
+dist-app/
+build/icon.svg.png
+build/icon.iconset/

@@ -11,7 +11,9 @@ import { executeAction, HttpError } from './executor';
 import { getScan } from './scanner';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const webDist = resolve(here, '../web');
+const webDist = process.env.ATLAS_WEB_DIST
+  ? resolve(process.env.ATLAS_WEB_DIST)
+  : resolve(here, '../web');
 const port = Number(process.env.ATLAS_PORT ?? 4317);
 const host = process.env.ATLAS_HOST ?? '127.0.0.1';
 const app = new Hono();

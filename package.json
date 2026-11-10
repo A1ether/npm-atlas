@@ -2,7 +2,9 @@
   "name": "npm-atlas",
   "version": "0.1.0",
   "description": "Scan every npm on your machine, see their global packages, and manage them from one visual atlas.",
+  "author": "A1ether",
   "type": "module",
+  "main": "electron/main.mjs",
   "bin": {
     "npm-atlas": "./bin/npm-atlas.mjs"
   },
@@ -18,7 +20,10 @@
     "typecheck": "tsc --noEmit",
     "build": "vite build && tsx scripts/build-server.ts",
     "start": "node dist/server/index.js",
-    "preview": "pnpm build && pnpm start"
+    "preview": "pnpm build && pnpm start",
+    "app:dev": "ATLAS_DEV_URL=http://localhost:5173 electron electron/main.mjs",
+    "app:server": "tsx scripts/build-app-server.ts",
+    "app:build": "vite build && tsx scripts/build-server.ts && tsx scripts/build-app-server.ts && electron-builder --mac dir --arm64"
   },
   "engines": {
     "node": ">=20"
@@ -55,6 +60,8 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
     "concurrently": "^10.0.7",
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2",
     "tailwindcss": "^4.3.5",
     "tsx": "^4.23.15",
