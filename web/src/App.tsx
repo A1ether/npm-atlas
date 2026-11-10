@@ -12,6 +12,7 @@ import { InstallationList } from './components/InstallationList';
 import { PackagePanel } from './components/PackagePanel';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Toasts, type ToastItem } from './components/Toasts';
+import { groupInstallations } from './groups';
 import { errorMessage } from './lib';
 
 type Theme = 'dark' | 'light';
@@ -37,6 +38,13 @@ export function App() {
   });
   const [scan, setScan] = useState<ScanResult | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [collapseByRoot, setCollapseByRoot] = useState(() => {
+    try {
+      return localStorage.getItem('npm-atlas-collapse') === '1';
+    } catch {
+      return false;
+    }
+  });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +61,14 @@ export function App() {
       // storage can be unavailable in private windows; theme still works in memory
     }
   }, [theme]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('npm-atlas-collapse', collapseByRoot ? '1' : '0');
+    } catch {
+      // preference is optional; the view still works without persistence
+    }
+  }, [collapseByRoot]);
 
   const pushToast = (
     kind: ToastItem['kind'],
@@ -96,20 +112,28 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const selected = useMemo(
-    () => scan?.installations.find((entry) => entry.id === selectedId) ?? null,
-    [scan, selectedId],
+  const groups = useMemo(
+    () => (scan ? groupInstallations(scan.installations, collapseByRoot) : []),
+    [scan, collapseByRoot],
   );
 
+  const selectedGroup = useMemo(() => {
+    const found = groups.find((group) =>
+      group.installations.some((entry) => entry.id === selectedId),
+    );
+    return found ?? groups[0] ?? null;
+  }, [groups, selectedId]);
+
   const runAction = async (action: ActionType, names: string[]) => {
-    if (!selected || !names.length) return;
+    const target = selectedGroup?.manager;
+    if (!target || !names.length) return;
     setConfirm(null);
-    setBusy({ installationId: selected.id, action, names });
+    setBusy({ installationId: target.id, action, names });
 
     try {
       const response = await postAction({
         type: action,
-        installationId: selected.id,
+        installationId: target.id,
         packages: names,
       });
       setScan(response.scan);
@@ -202,7 +226,7 @@ export function App() {
   if (!scan) return null;
 
   const selectedBusy =
-    busy && selected && busy.installationId === selected.id
+    busy && selectedGroup && busy.installationId === selectedGroup.manager.id
       ? { action: busy.action, names: busy.names }
       : null;
 
@@ -234,14 +258,16 @@ export function App() {
         {scan.installations.length ? (
           <div className="workspace">
             <InstallationList
-              installations={scan.installations}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
+              groups={groups}
+              selectedGroupId={selectedGroup?.id ?? null}
+              collapsed={collapseByRoot}
+              onSelect={(group) => setSelectedId(group.primary.id)}
+              onToggleCollapse={() => setCollapseByRoot((value) => !value)}
             />
 
-            {selected ? (
+            {selectedGroup ? (
               <PackagePanel
-                installation={selected}
+                group={selectedGroup}
                 busy={selectedBusy}
                 onUpdate={(name) => void runAction('update', [name])}
                 onUninstall={(pkg) => setConfirm({ kind: 'uninstall', pkg })}
@@ -250,7 +276,9 @@ export function App() {
             ) : (
               <section className="panel">
                 <div className="empty-state">
-                  <div className="empty-title">请选择一个 npm 安装</div>
+                  <div className="empty-title">
+                    {collapseByRoot ? '请选择一个全局目录' : '请选择一个 npm 安装'}
+                  </div>
                 </div>
               </section>
             )}
@@ -286,7 +314,7 @@ export function App() {
         body={
           confirm?.kind === 'uninstall' ? (
             <>
-              将从 <code>{selected?.path}</code> 对应的全局目录中移除{' '}
+              将从 <code>{selectedGroup?.path}</code> 对应的全局目录中移除{' '}
               <code>{confirm.pkg.name}</code>
               {confirm.pkg.version !== 'unknown' ? `（v${confirm.pkg.version}）` : ''}。
               依赖该包的命令行工具会立即失效。

@@ -11,12 +11,13 @@ import type {
   GlobalPackage,
   NpmInstallation,
 } from '../../../shared/types';
+import type { InstallationGroup } from '../groups';
 import { SOURCE_LABEL, splitPackageName } from '../lib';
 
 type SortMode = 'name' | 'outdated';
 
 interface PackagePanelProps {
-  installation: NpmInstallation;
+  group: InstallationGroup;
   busy: { action: ActionType; names: string[] } | null;
   onUpdate: (name: string) => void;
   onUninstall: (pkg: GlobalPackage) => void;
@@ -24,12 +25,18 @@ interface PackagePanelProps {
 }
 
 export function PackagePanel({
-  installation,
+  group,
   busy,
   onUpdate,
   onUninstall,
   onUpdateAll,
 }: PackagePanelProps) {
+  const installation = group.manager;
+  const shared = group.installations.length > 1;
+  const versionsLabel = group.versions.length ? group.versions.join(' / ') : '?';
+  const nodeVersionsLabel = group.nodeVersions.length
+    ? group.nodeVersions.join(' / ')
+    : installation.nodeVersion ?? '?';
   const [query, setQuery] = useState('');
   const [onlyOutdated, setOnlyOutdated] = useState(false);
   const [sort, setSort] = useState<SortMode>('name');
@@ -37,7 +44,7 @@ export function PackagePanel({
   useEffect(() => {
     setQuery('');
     setOnlyOutdated(false);
-  }, [installation.id]);
+  }, [group.id]);
 
   const visible = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -73,14 +80,15 @@ export function PackagePanel({
         <div style={{ minWidth: 0 }}>
           <div className="eyebrow">正在管理</div>
           <h2 className="panel-title">
-            {SOURCE_LABEL[installation.source]}
-            <span className="muted">· npm {installation.version ?? '?'}</span>
-            {installation.isDefault ? (
-              <span className="default-pill">默认</span>
+            {SOURCE_LABEL[group.primary.source]}
+            <span className="muted">· npm {versionsLabel}</span>
+            {group.isDefault ? <span className="default-pill">默认</span> : null}
+            {shared ? (
+              <span className="source-pill">{group.installations.length} 个 npm</span>
             ) : null}
           </h2>
-          <div className="panel-path" title={installation.path}>
-            {installation.path}
+          <div className="panel-path" title={group.path}>
+            {group.path}
           </div>
         </div>
 
@@ -101,8 +109,8 @@ export function PackagePanel({
       <div className="facts">
         <div className="fact">
           <div className="fact-label">Node</div>
-          <div className="fact-value" title={installation.nodeVersion ?? '未知'}>
-            {installation.nodeVersion ?? '未知'}
+          <div className="fact-value" title={nodeVersionsLabel}>
+            {nodeVersionsLabel}
           </div>
         </div>
         <div className="fact">
@@ -119,13 +127,29 @@ export function PackagePanel({
         </div>
         <div className="fact">
           <div className="fact-label">
-            全局目录{installation.sharedGlobalRoot ? ' · 共享' : ''}
+            全局目录{shared ? ' · 共享' : ''}
           </div>
           <div className="fact-value" title={installation.globalRoot ?? '未知'}>
             {installation.globalRoot ?? '未知'}
           </div>
         </div>
       </div>
+
+      {shared ? (
+        <div className="npm-variants">
+          <span className="npm-variants-label">该目录下的 npm</span>
+          {group.installations.map((entry) => (
+            <span
+              key={entry.id}
+              className="npm-variant"
+              title={`${entry.path} · node ${entry.nodeVersion ?? '?'}`}
+            >
+              {entry.version ?? '?'} · {SOURCE_LABEL[entry.source]}
+              {entry.isDefault ? ' · 默认' : ''}
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       <div className="toolbar">
         <div className="search">
@@ -186,7 +210,7 @@ export function PackagePanel({
 
       <div className="panel-foot">
         <span>
-          操作仅作用于当前安装；包名与安装均在扫描结果中校验后才执行。
+          操作仅作用于当前{shared ? '全局目录' : '安装'}；包名与安装均在扫描结果中校验后才执行。
         </span>
         <span>
           <code>npm install -g &lt;pkg&gt;@latest</code>
@@ -218,7 +242,9 @@ function PackageTable({
           <div className="empty-icon">
             <PackageSearch size={22} />
           </div>
-          <div className="empty-title">这个 npm 还没有全局包</div>
+          <div className="empty-title">
+            {installation.sharedGlobalRoot ? '这个全局目录还没有包' : '这个 npm 还没有全局包'}
+          </div>
           <div className="empty-note">
             {installation.error
               ? installation.error
