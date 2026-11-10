@@ -6,6 +6,7 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import type { ActionRequest } from '../shared/types';
+import { resetDefaultNpm, setDefaultNpm } from './defaultNpm';
 import { executeAction, HttpError } from './executor';
 import { getScan } from './scanner';
 
@@ -74,6 +75,16 @@ app.post('/api/action', async (c) => {
     }),
   );
 });
+
+app.post('/api/default', async (c) => {
+  const body = await c.req.json<{ installationId?: string }>();
+  if (!body.installationId) {
+    throw new HttpError(400, '缺少 installationId');
+  }
+  return c.json(await setDefaultNpm(await getScan(), body.installationId));
+});
+
+app.post('/api/default/reset', async (c) => c.json(await resetDefaultNpm()));
 
 app.onError((error, c) => {
   if (error instanceof HttpError) {

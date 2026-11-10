@@ -45,12 +45,14 @@ pnpm scan --json    # 完整 JSON
 - **全局包清单**：`npm ls -g --depth=0 --json` + `npm outdated -g --json`。
 - **共享目录识别**：不同 npm 版本指向同一全局目录时标记「共享全局目录」，统计按目录去重。
 - **两种视图**：逐个 npm 查看，或开启「按全局目录折叠」把共享目录合并成一条，并在详情里列出该目录下的所有 npm 版本；选择会记忆在浏览器中。
+- **切换默认 npm**：在任意版本旁点「设为默认」，npm-atlas 会创建自己的 `npm`/`npx` 包装器，并在 shell 启动文件末尾追加带标记的 PATH 配置（修改前自动备份）。新开终端生效，可一键移除恢复系统默认。
 - **管理操作**：单包更新、批量更新、单包卸载；二次确认、逐项结果、失败原因原样透出。
 - **安全防护**：
   - 不使用 shell，所有命令以参数数组执行；
   - 安装 ID 与包名必须存在于最近一次扫描结果；
   - 禁止卸载 npm 自身；批量更新时 npm 排在最后；
-  - 仅接受来自本机的请求，拒绝跨站 Origin 与非本机 Host。
+  - 仅接受来自本机的请求，拒绝跨站 Origin 与非本机 Host；
+  - 切换默认 npm 时会先展示将修改的文件，确认后才写入，并保留带时间戳的备份。
 - **界面**：深/浅色主题、搜索、仅看可更新、排序、桌面与移动端自适应。
 
 ## 脚本
@@ -86,6 +88,12 @@ server (Hono)
   { "type": "update", "installationId": "a92cbe264634", "packages": ["typescript"] }
   ```
   `type` 为 `update` 或 `uninstall`。返回逐包结果与刷新后的完整扫描。
+- `POST /api/default`
+  ```json
+  { "installationId": "2670ed6c1223" }
+  ```
+  写入 npm-atlas 包装器与 shell PATH 配置，返回刷新后的扫描与提示。
+- `POST /api/default/reset`：移除包装器与 PATH 配置。
 
 ## 目录
 
@@ -93,16 +101,21 @@ server (Hono)
 bin/npm-atlas.mjs     启动入口（构建后）
 server/scanner.ts     发现、探测、解析、缓存
 server/executor.ts    更新/卸载与安全校验
+server/defaultNpm.ts  默认 npm 包装器、shell 集成与恢复
+server/settings.ts    PATH/shell/状态文件与备份
 server/index.ts       Hono 服务、静态托管、本机访问保护
 shared/types.ts       前后端共享类型
 web/src/              React 界面
 docs/PLAN.md          调研、选型与设计文档
 ```
 
+状态文件与包装器默认位于 `~/.npm-atlas/`（可用 `ATLAS_STATE_DIR` 覆盖），shell 文件可用 `ATLAS_RC_FILE` 覆盖（主要用于测试）。
+
 ## 已知限制
 
 - 目前主要支持 macOS / Linux；Windows 的 `npm.cmd` 需要额外处理（roadmap）。
-- 不修改 PATH，也不提供「切换默认 npm」；默认项只做展示。
+- 切换默认 npm 后需要新开终端（或 `source` 对应配置文件）才生效；当前已运行的进程不会自动更新 PATH。
+- shell 自动集成支持 zsh / bash / fish；其他 shell 会给出需要手动添加的 PATH 片段。
 - 全局目录无写权限时，操作会失败并原样显示 npm stderr；可改用对应版本管理器安装，或调整 prefix。
 - 离线或 registry 不可达时，包清单仍可读，但「可更新」信息可能缺失。
 
@@ -111,7 +124,6 @@ docs/PLAN.md          调研、选型与设计文档
 - Windows 支持
 - 包详情（描述、主页、依赖树）
 - 操作历史与回滚
-- 默认 npm 切换（需安全地修改 shell 配置）
 
 ## 调研与设计
 

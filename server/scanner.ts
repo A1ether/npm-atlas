@@ -4,11 +4,22 @@ import { access, readdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type {
+  DefaultState,
   GlobalPackage,
   NpmInstallation,
   NpmSource,
   ScanResult,
 } from '../shared/types';
+import {
+  ATLAS_PATHS,
+  buildManualSnippet,
+  buildShellSnippet,
+  detectShell,
+  isAtlasWrapperPath,
+  isIntegrationInstalled,
+  readStoredState,
+  shortPath,
+} from './settings';
 import { runCommand } from './run';
 
 const HOME = homedir();
@@ -61,6 +72,19 @@ async function isExecutable(file: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function wrapperIsFirstInPath(): Promise<boolean> {
+  const dirs = (process.env.PATH ?? '').split(PATH_SEP).filter(Boolean);
+  for (const dir of dirs) {
+    const candidate = path.join(dir, NPM_BIN);
+    if (await isExecutable(candidate)) {
+      return (
+        path.resolve(candidate) === path.resolve(ATLAS_PATHS.wrapperNpm)
+      );
+    }
+  }
+  return false;
 }
 
 async function listDirs(dir: string): Promise<string[]> {
@@ -180,6 +204,7 @@ async function collectRawCandidates(): Promise<RawCandidate[]> {
 
   const add = async (file: string, viaPath: boolean, pathIndex: number) => {
     const normalized = path.normalize(file);
+    if (isAtlasWrapperPath(normalized)) return;
     if (seenPaths.has(normalized)) return;
     if (!(await isExecutable(normalized))) return;
     seenPaths.add(normalized);
@@ -465,6 +490,21 @@ export async function scan(): Promise<ScanResult> {
     });
   }
 
+  const stored = await readStoredState();
+  const configuredTarget = stored
+    ? installations.find(
+        (entry) =>
+          path.resolve(entry.path) === path.resolve(stored.targetPath) ||
+          path.resolve(entry.realPath) === path.resolve(stored.targetRealPath),
+      )
+    : undefined;
+
+  if (configuredTarget) {
+    for (const installation of installations) {
+      installation.isDefault = installation === configuredTarget;
+    }
+  }
+
   const rootCounts = new Map<string, number>();
   for (const installation of installations) {
     if (!installation.globalRoot) continue;
@@ -486,9 +526,34 @@ export async function scan(): Promise<ScanResult> {
     return compareVersions(a.version, b.version);
   });
 
+  const shellInfo = detectShell();
+  const shellIntegration = await isIntegrationInstalled(shellInfo.rcFile);
+  const pendingRestart = Boolean(
+    stored && configuredTarget && !(await wrapperIsFirstInPath()),
+  );
+
+  const defaultState: DefaultState = {
+    configured: Boolean(stored),
+    targetId: configuredTarget?.id ?? null,
+    targetPath: configuredTarget?.path ?? stored?.targetPath ?? null,
+    npmVersion: configuredTarget?.version ?? stored?.npmVersion ?? null,
+    nodeVersion: configuredTarget?.nodeVersion ?? stored?.nodeVersion ?? null,
+    source: configuredTarget?.source ?? stored?.source ?? null,
+    wrapperDir: ATLAS_PATHS.wrapperDir,
+    shell: shellInfo.shell,
+    rcFile: shellInfo.rcFile,
+    rcFileShort: shortPath(shellInfo.rcFile),
+    shellIntegration,
+    pendingRestart,
+    targetAvailable: Boolean(configuredTarget),
+    snippet: buildShellSnippet(shellInfo.shell) ?? buildManualSnippet(),
+    updatedAt: stored?.updatedAt ?? null,
+  };
+
   return {
     installations,
     defaultPath: installations.find((entry) => entry.isDefault)?.path ?? null,
+    defaultState,
     scannedAt: new Date().toISOString(),
     platform: PLATFORM,
     durationMs: Date.now() - startedAt,

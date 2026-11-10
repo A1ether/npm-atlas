@@ -184,7 +184,7 @@ npm-atlas/
 - [ ] Windows 路径与 `npm.cmd`
 - [ ] 权限失败时给出 sudo/prefix 修复建议
 - [ ] 包详情与历史记录
-- [ ] 默认 npm 切换方案（需修改 shell 配置，单独设计）
+- [x] 默认 npm 切换：`~/.npm-atlas/bin` 包装器 + shell PATH 标记块，带备份与一键恢复
 
 ### 验收标准
 

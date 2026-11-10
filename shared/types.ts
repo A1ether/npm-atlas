@@ -42,9 +42,29 @@ export interface NpmInstallation {
   error?: string;
 }
 
+export interface DefaultState {
+  configured: boolean;
+  targetId: string | null;
+  targetPath: string | null;
+  npmVersion: string | null;
+  nodeVersion: string | null;
+  source: NpmSource | null;
+  wrapperDir: string;
+  shell: string;
+  rcFile: string | null;
+  rcFileShort: string | null;
+  shellIntegration: boolean;
+  /** The wrapper is not the first npm in this process PATH yet. */
+  pendingRestart: boolean;
+  targetAvailable: boolean;
+  snippet: string | null;
+  updatedAt: string | null;
+}
+
 export interface ScanResult {
   installations: NpmInstallation[];
   defaultPath: string | null;
+  defaultState: DefaultState;
   scannedAt: string;
   platform: string;
   durationMs: number;
@@ -68,4 +88,9 @@ export interface ActionResponse {
   ok: boolean;
   results: PackageActionResult[];
   scan: ScanResult;
+}
+
+export interface DefaultActionResponse {
+  scan: ScanResult;
+  messages: string[];
 }

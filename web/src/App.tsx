@@ -1,11 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
+import {
+  AlertTriangle,
+  Loader2,
+  RefreshCw,
+  RotateCcw,
+  Star,
+} from 'lucide-react';
 import type {
   ActionType,
   GlobalPackage,
+  NpmInstallation,
   ScanResult,
 } from '../../shared/types';
-import { fetchScan, postAction } from './api';
+import {
+  applyDefaultNpm,
+  fetchScan,
+  postAction,
+  resetDefaultNpm as resetDefaultRequest,
+} from './api';
 import { Header } from './components/Header';
 import { Stats } from './components/Stats';
 import { InstallationList } from './components/InstallationList';
@@ -13,13 +25,15 @@ import { PackagePanel } from './components/PackagePanel';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Toasts, type ToastItem } from './components/Toasts';
 import { groupInstallations } from './groups';
-import { errorMessage } from './lib';
+import { errorMessage, SOURCE_LABEL } from './lib';
 
 type Theme = 'dark' | 'light';
 
 type ConfirmState =
   | { kind: 'uninstall'; pkg: GlobalPackage }
   | { kind: 'update-all'; names: string[] }
+  | { kind: 'set-default'; installation: NpmInstallation }
+  | { kind: 'reset-default' }
   | null;
 
 interface BusyState {
@@ -51,8 +65,10 @@ export function App() {
   const [busy, setBusy] = useState<BusyState | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [switchingDefault, setSwitchingDefault] = useState(false);
   const toastId = useRef(0);
   const actionInFlight = useRef(false);
+  const defaultInFlight = useRef(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -127,7 +143,14 @@ export function App() {
 
   const runAction = async (action: ActionType, names: string[]) => {
     const target = selectedGroup?.manager;
-    if (!target || !names.length || actionInFlight.current) return;
+    if (
+      !target ||
+      !names.length ||
+      actionInFlight.current ||
+      defaultInFlight.current
+    ) {
+      return;
+    }
 
     actionInFlight.current = true;
     setConfirm(null);
@@ -174,6 +197,60 @@ export function App() {
     } finally {
       actionInFlight.current = false;
       setBusy(null);
+    }
+  };
+
+  const changeDefault = async (installation: NpmInstallation) => {
+    if (actionInFlight.current || defaultInFlight.current) return;
+    defaultInFlight.current = true;
+    setConfirm(null);
+    setSwitchingDefault(true);
+
+    try {
+      const response = await applyDefaultNpm(installation.id);
+      setScan(response.scan);
+      setSelectedId((previous) => {
+        if (
+          previous &&
+          response.scan.installations.some((entry) => entry.id === previous)
+        ) {
+          return previous;
+        }
+        return response.scan.installations[0]?.id ?? null;
+      });
+      pushToast('success', '默认 npm 已切换', response.messages.join('\n'));
+    } catch (cause) {
+      pushToast('error', '切换默认 npm 失败', errorMessage(cause));
+    } finally {
+      defaultInFlight.current = false;
+      setSwitchingDefault(false);
+    }
+  };
+
+  const removeDefault = async () => {
+    if (actionInFlight.current || defaultInFlight.current) return;
+    defaultInFlight.current = true;
+    setConfirm(null);
+    setSwitchingDefault(true);
+
+    try {
+      const response = await resetDefaultRequest();
+      setScan(response.scan);
+      setSelectedId((previous) => {
+        if (
+          previous &&
+          response.scan.installations.some((entry) => entry.id === previous)
+        ) {
+          return previous;
+        }
+        return response.scan.installations[0]?.id ?? null;
+      });
+      pushToast('success', '默认 npm 设置已移除', response.messages.join('\n'));
+    } catch (cause) {
+      pushToast('error', '移除默认 npm 失败', errorMessage(cause));
+    } finally {
+      defaultInFlight.current = false;
+      setSwitchingDefault(false);
     }
   };
 
@@ -234,6 +311,7 @@ export function App() {
       ? { action: busy.action, names: busy.names }
       : null;
   const blockedByOtherAction = Boolean(busy) && !selectedBusy;
+  const actionsBlocked = blockedByOtherAction || switchingDefault;
 
   return (
     <div>
@@ -242,12 +320,50 @@ export function App() {
         scannedAt={scan.scannedAt}
         durationMs={scan.durationMs}
         refreshing={refreshing}
-        disabled={Boolean(busy)}
+        disabled={Boolean(busy) || switchingDefault}
         onToggleTheme={toggleTheme}
         onRefresh={() => void load(true)}
       />
 
       <main className="app-main">
+        {scan.defaultState.configured ? (
+          <div
+            className={`default-banner${scan.defaultState.targetAvailable ? '' : ' warn'}`}
+          >
+            <Star size={14} className="default-banner-icon" />
+            <div className="default-banner-text">
+              <strong>
+                默认 npm：{scan.defaultState.npmVersion ?? '未知'}
+                {scan.defaultState.source
+                  ? ` · ${SOURCE_LABEL[scan.defaultState.source]}`
+                  : ''}
+              </strong>
+              <span>
+                {!scan.defaultState.targetAvailable
+                  ? '已配置的目标 npm 不存在，请重新选择或移除默认设置。'
+                  : scan.defaultState.pendingRestart
+                    ? scan.defaultState.shellIntegration &&
+                      scan.defaultState.rcFileShort
+                      ? `新开终端，或执行 source ${scan.defaultState.rcFileShort} 后生效。`
+                      : `请手动把 ${scan.defaultState.wrapperDir} 放到 PATH 最前。`
+                    : '当前终端已生效。'}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-quiet default-banner-action"
+              disabled={switchingDefault || Boolean(busy)}
+              onClick={() => {
+                if (actionInFlight.current || defaultInFlight.current) return;
+                setConfirm({ kind: 'reset-default' });
+              }}
+            >
+              <RotateCcw size={13} />
+              移除默认设置
+            </button>
+          </div>
+        ) : null}
+
         {error ? (
           <div className="error-banner" role="alert">
             <AlertTriangle size={14} />
@@ -274,16 +390,26 @@ export function App() {
               <PackagePanel
                 group={selectedGroup}
                 busy={selectedBusy}
-                blocked={blockedByOtherAction}
+                blocked={actionsBlocked}
+                blockedReason={
+                  switchingDefault
+                    ? '正在切换默认 npm，请稍候…'
+                    : '另一个 npm 安装正在执行操作，完成前暂不能提交新的更新或卸载。'
+                }
+                onSetDefault={(installation) => {
+                  if (actionInFlight.current || defaultInFlight.current) return;
+                  setConfirm({ kind: 'set-default', installation });
+                }}
                 onUpdate={(name) => {
-                  if (!actionInFlight.current) void runAction('update', [name]);
+                  if (actionInFlight.current || defaultInFlight.current) return;
+                  void runAction('update', [name]);
                 }}
                 onUninstall={(pkg) => {
-                  if (actionInFlight.current) return;
+                  if (actionInFlight.current || defaultInFlight.current) return;
                   setConfirm({ kind: 'uninstall', pkg });
                 }}
                 onUpdateAll={(names) => {
-                  if (actionInFlight.current) return;
+                  if (actionInFlight.current || defaultInFlight.current) return;
                   setConfirm({ kind: 'update-all', names });
                 }}
               />
@@ -364,6 +490,79 @@ export function App() {
               </div>
             </>
           ) : null
+        }
+      />
+
+      <ConfirmDialog
+        open={confirm?.kind === 'set-default'}
+        title="切换默认 npm"
+        confirmLabel={
+          scan.defaultState.shellIntegration
+            ? '设为默认'
+            : '安装包装器并设为默认'
+        }
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => {
+          if (confirm?.kind === 'set-default') {
+            void changeDefault(confirm.installation);
+          }
+        }}
+        body={
+          confirm?.kind === 'set-default' ? (
+            <>
+              <div className="default-target">
+                <div className="default-target-title">
+                  <span className="default-target-version">
+                    npm {confirm.installation.version ?? '?'}
+                  </span>
+                  <span className="source-pill">
+                    {SOURCE_LABEL[confirm.installation.source]}
+                  </span>
+                </div>
+                <code>{confirm.installation.path}</code>
+              </div>
+
+              {!scan.defaultState.shellIntegration ? (
+                <>
+                  npm-atlas 会创建{' '}
+                  <code>{scan.defaultState.wrapperDir}/npm</code>
+                  （以及 npx，若存在），并向{' '}
+                  <code>
+                    {scan.defaultState.rcFileShort ?? 'shell 启动文件'}
+                  </code>{' '}
+                  末尾追加一段带标记的 PATH 配置。修改前会备份原文件。
+                  {!scan.defaultState.rcFile ? (
+                    <> 未识别到可自动修改的 shell，应用后需要手动添加 PATH。</>
+                  ) : null}
+                </>
+              ) : (
+                <>将更新 npm-atlas 包装器的指向；新开终端后生效。</>
+              )}
+
+              <div className="dialog-note">
+                切换的是终端里的 <code>npm</code> / <code>npx</code> 命令，
+                不会移动或复制已安装的包。可随时在页面上方移除该设置。
+              </div>
+            </>
+          ) : null
+        }
+      />
+
+      <ConfirmDialog
+        open={confirm?.kind === 'reset-default'}
+        title="移除默认 npm 设置"
+        danger
+        confirmLabel="确认移除"
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => void removeDefault()}
+        body={
+          <>
+            将删除 <code>{scan.defaultState.wrapperDir}</code> 下的 npm / npx
+            包装器，并从{' '}
+            <code>{scan.defaultState.rcFileShort ?? 'shell 启动文件'}</code>{' '}
+            移除 npm-atlas 的 PATH 配置（修改前会备份）。之后默认 npm
+            重新由系统 PATH 决定。
+          </>
         }
       />
 

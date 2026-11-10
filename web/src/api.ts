@@ -1,6 +1,7 @@
 import type {
   ActionRequest,
   ActionResponse,
+  DefaultActionResponse,
   ScanResult,
 } from '../../shared/types';
 
@@ -26,4 +27,22 @@ export async function postAction(request: ActionRequest): Promise<ActionResponse
     body: JSON.stringify(request),
   });
   return readJson<ActionResponse>(response);
+}
+
+export async function applyDefaultNpm(
+  installationId: string,
+): Promise<DefaultActionResponse> {
+  const response = await fetch('/api/default', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ installationId }),
+  });
+  return readJson<DefaultActionResponse>(response);
+}
+
+export async function resetDefaultNpm(): Promise<DefaultActionResponse> {
+  const response = await fetch('/api/default/reset', {
+    method: 'POST',
+  });
+  return readJson<DefaultActionResponse>(response);
 }

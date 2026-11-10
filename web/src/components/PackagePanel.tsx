@@ -4,6 +4,7 @@ import {
   Loader2,
   PackageSearch,
   Search,
+  Star,
   Trash2,
 } from 'lucide-react';
 import type {
@@ -21,18 +22,22 @@ interface PackagePanelProps {
   busy: { action: ActionType; names: string[] } | null;
   /** Another npm installation is running an action; block this panel too. */
   blocked: boolean;
+  blockedReason?: string;
   onUpdate: (name: string) => void;
   onUninstall: (pkg: GlobalPackage) => void;
   onUpdateAll: (names: string[]) => void;
+  onSetDefault: (installation: NpmInstallation) => void;
 }
 
 export function PackagePanel({
   group,
   busy,
   blocked,
+  blockedReason,
   onUpdate,
   onUninstall,
   onUpdateAll,
+  onSetDefault,
 }: PackagePanelProps) {
   const installation = group.manager;
   const shared = group.installations.length > 1;
@@ -97,6 +102,23 @@ export function PackagePanel({
         </div>
 
         <div className="head-actions">
+          {!shared ? (
+            <button
+              type="button"
+              className="btn"
+              disabled={installation.isDefault || actionsDisabled}
+              title={
+                installation.isDefault
+                  ? '当前已是默认 npm'
+                  : '把终端里的 npm / npx 切换到这个安装'
+              }
+              onClick={() => onSetDefault(installation)}
+            >
+              <Star size={14} />
+              {installation.isDefault ? '已是默认' : '设为默认'}
+            </button>
+          ) : null}
+
           <button
             type="button"
             className="btn btn-primary"
@@ -141,17 +163,33 @@ export function PackagePanel({
 
       {shared ? (
         <div className="npm-variants">
-          <span className="npm-variants-label">该目录下的 npm</span>
-          {group.installations.map((entry) => (
-            <span
-              key={entry.id}
-              className="npm-variant"
-              title={`${entry.path} · node ${entry.nodeVersion ?? '?'}`}
-            >
-              {entry.version ?? '?'} · {SOURCE_LABEL[entry.source]}
-              {entry.isDefault ? ' · 默认' : ''}
-            </span>
-          ))}
+          <span className="npm-variants-label">
+            该目录下的 npm
+            {group.installations.some((entry) => !entry.isDefault)
+              ? ' · 点选设为默认'
+              : ''}
+          </span>
+          {group.installations.map((entry) => {
+            const active = entry.isDefault;
+            return (
+              <button
+                key={entry.id}
+                type="button"
+                className={`npm-variant${active ? ' is-default' : ''}`}
+                disabled={active || actionsDisabled}
+                title={
+                  active
+                    ? '当前默认 npm'
+                    : `把终端里的 npm / npx 切换到这个安装（${entry.path}）`
+                }
+                onClick={() => onSetDefault(entry)}
+              >
+                {entry.version ?? '?'} · {SOURCE_LABEL[entry.source]}
+                {active ? ' · 默认' : null}
+                {!active ? <Star size={10} /> : null}
+              </button>
+            );
+          })}
         </div>
       ) : null}
 
@@ -205,7 +243,8 @@ export function PackagePanel({
       ) : blocked ? (
         <div className="busy-note blocked">
           <Loader2 size={13} className="spin" />
-          另一个 npm 安装正在执行操作，完成前暂不能提交新的更新或卸载。
+          {blockedReason ??
+            '另一个 npm 安装正在执行操作，完成前暂不能提交新的更新或卸载。'}
         </div>
       ) : null}
 
