@@ -1,0 +1,64 @@
+{
+  "name": "npm-atlas",
+  "version": "0.1.0",
+  "description": "Scan every npm on your machine, see their global packages, and manage them from one visual atlas.",
+  "type": "module",
+  "bin": {
+    "npm-atlas": "./bin/npm-atlas.mjs"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c cyan,magenta \"tsx watch server/index.ts\" \"vite\"",
+    "dev:api": "tsx watch server/index.ts",
+    "dev:web": "vite",
+    "scan": "tsx server/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build && tsx scripts/build-server.ts",
+    "start": "node dist/server/index.js",
+    "preview": "pnpm build && pnpm start"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "npm",
+    "global-packages",
+    "node",
+    "visualization",
+    "cli",
+    "nvm",
+    "mise"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/A1ether/npm-atlas.git"
+  },
+  "homepage": "https://github.com/A1ether/npm-atlas#readme",
+  "bugs": {
+    "url": "https://github.com/A1ether/npm-atlas/issues"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.6",
+    "hono": "^4.13.17",
+    "lucide-react": "^1.70.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "concurrently": "^10.0.7",
+    "esbuild": "^0.28.2",
+    "tailwindcss": "^4.3.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6"
+  }
+}
