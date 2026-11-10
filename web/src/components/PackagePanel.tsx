@@ -19,6 +19,8 @@ type SortMode = 'name' | 'outdated';
 interface PackagePanelProps {
   group: InstallationGroup;
   busy: { action: ActionType; names: string[] } | null;
+  /** Another npm installation is running an action; block this panel too. */
+  blocked: boolean;
   onUpdate: (name: string) => void;
   onUninstall: (pkg: GlobalPackage) => void;
   onUpdateAll: (names: string[]) => void;
@@ -27,6 +29,7 @@ interface PackagePanelProps {
 export function PackagePanel({
   group,
   busy,
+  blocked,
   onUpdate,
   onUninstall,
   onUpdateAll,
@@ -73,6 +76,7 @@ export function PackagePanel({
 
   const isBusy = Boolean(busy);
   const busyHere = busy !== null;
+  const actionsDisabled = isBusy || blocked;
 
   return (
     <section className="panel">
@@ -96,7 +100,7 @@ export function PackagePanel({
           <button
             type="button"
             className="btn btn-primary"
-            disabled={!outdatedNames.length || isBusy}
+            disabled={!outdatedNames.length || actionsDisabled}
             onClick={() => onUpdateAll(outdatedNames)}
           >
             <ArrowUpCircle size={14} />
@@ -198,12 +202,17 @@ export function PackagePanel({
             请勿关闭服务…
           </div>
         </>
+      ) : blocked ? (
+        <div className="busy-note blocked">
+          <Loader2 size={13} className="spin" />
+          另一个 npm 安装正在执行操作，完成前暂不能提交新的更新或卸载。
+        </div>
       ) : null}
 
       <PackageTable
         installation={installation}
         packages={visible}
-        busy={isBusy}
+        busy={actionsDisabled}
         onUpdate={onUpdate}
         onUninstall={onUninstall}
       />

@@ -1,0 +1,3 @@
+- generic [ref=e4]:
+  - generic [ref=e5]: 正在扫描本机 npm…
+  - generic [ref=e8]: 逐个探测 PATH、mise、nvm、Homebrew 等安装，并读取全局包与可更新版本。 首次扫描通常需要几秒。

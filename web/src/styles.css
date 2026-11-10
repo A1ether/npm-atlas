@@ -893,6 +893,11 @@ button {
   gap: 7px;
 }
 
+.busy-note.blocked {
+  color: var(--muted);
+  background: var(--panel-2);
+}
+
 /* ---------- table ---------- */
 
 .table-wrap {

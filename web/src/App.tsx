@@ -52,6 +52,7 @@ export function App() {
   const [confirm, setConfirm] = useState<ConfirmState>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastId = useRef(0);
+  const actionInFlight = useRef(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -126,7 +127,9 @@ export function App() {
 
   const runAction = async (action: ActionType, names: string[]) => {
     const target = selectedGroup?.manager;
-    if (!target || !names.length) return;
+    if (!target || !names.length || actionInFlight.current) return;
+
+    actionInFlight.current = true;
     setConfirm(null);
     setBusy({ installationId: target.id, action, names });
 
@@ -169,6 +172,7 @@ export function App() {
     } catch (cause) {
       pushToast('error', '操作失败', errorMessage(cause));
     } finally {
+      actionInFlight.current = false;
       setBusy(null);
     }
   };
@@ -229,6 +233,7 @@ export function App() {
     busy && selectedGroup && busy.installationId === selectedGroup.manager.id
       ? { action: busy.action, names: busy.names }
       : null;
+  const blockedByOtherAction = Boolean(busy) && !selectedBusy;
 
   return (
     <div>
@@ -269,9 +274,18 @@ export function App() {
               <PackagePanel
                 group={selectedGroup}
                 busy={selectedBusy}
-                onUpdate={(name) => void runAction('update', [name])}
-                onUninstall={(pkg) => setConfirm({ kind: 'uninstall', pkg })}
-                onUpdateAll={(names) => setConfirm({ kind: 'update-all', names })}
+                blocked={blockedByOtherAction}
+                onUpdate={(name) => {
+                  if (!actionInFlight.current) void runAction('update', [name]);
+                }}
+                onUninstall={(pkg) => {
+                  if (actionInFlight.current) return;
+                  setConfirm({ kind: 'uninstall', pkg });
+                }}
+                onUpdateAll={(names) => {
+                  if (actionInFlight.current) return;
+                  setConfirm({ kind: 'update-all', names });
+                }}
               />
             ) : (
               <section className="panel">
@@ -304,7 +318,6 @@ export function App() {
         title="卸载全局包"
         danger
         confirmLabel="确认卸载"
-        busy={Boolean(busy)}
         onCancel={() => setConfirm(null)}
         onConfirm={() => {
           if (confirm?.kind === 'uninstall') {
@@ -327,7 +340,6 @@ export function App() {
         open={confirm?.kind === 'update-all'}
         title="更新全部可更新包"
         confirmLabel="开始更新"
-        busy={Boolean(busy)}
         onCancel={() => setConfirm(null)}
         onConfirm={() => {
           if (confirm?.kind === 'update-all') {
