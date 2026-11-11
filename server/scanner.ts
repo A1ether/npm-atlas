@@ -21,6 +21,7 @@ import {
   shortPath,
 } from './settings';
 import { runCommand } from './run';
+import { mapLimit } from './async';
 
 const HOME = homedir();
 const PLATFORM = process.platform;
@@ -399,26 +400,6 @@ function displayScore(observation: Observation): number {
   }
   if (file.endsWith('/bin/npm')) score += 1;
   return score;
-}
-
-async function mapLimit<T, R>(
-  items: T[],
-  limit: number,
-  mapper: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let cursor = 0;
-
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      results[index] = await mapper(items[index]);
-    }
-  });
-
-  await Promise.all(workers);
-  return results;
 }
 
 export async function scan(): Promise<ScanResult> {

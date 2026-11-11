@@ -4,7 +4,7 @@ import type {
   DefaultActionResponse,
   ScanResult,
 } from '../shared/types';
-import { HttpError } from './executor';
+import { HttpError } from './http';
 import { getScan, invalidateScan } from './scanner';
 import {
   ATLAS_PATHS,

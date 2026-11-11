@@ -1,4 +1,8 @@
-import type { NpmSource } from '../../shared/types';
+import type {
+  DependencyType,
+  NpmSource,
+  PackageManager,
+} from '../../shared/types';
 
 export const SOURCE_LABEL: Record<NpmSource, string> = {
   nvm: 'nvm',
@@ -13,6 +17,38 @@ export const SOURCE_LABEL: Record<NpmSource, string> = {
   system: 'system',
   custom: 'custom',
 };
+
+export const PM_LABEL: Record<PackageManager, string> = {
+  npm: 'npm',
+  pnpm: 'pnpm',
+  yarn: 'yarn',
+  bun: 'bun',
+};
+
+export const DEP_TYPE_LABEL: Record<DependencyType, string> = {
+  prod: '生产',
+  dev: '开发',
+  optional: '可选',
+  peer: '对等',
+};
+
+export function addCommand(manager: PackageManager): string {
+  if (manager === 'npm') return 'npm install <pkg>@latest';
+  if (manager === 'pnpm') return 'pnpm add <pkg>@latest';
+  if (manager === 'yarn') return 'yarn add <pkg>@latest';
+  return 'bun add <pkg>@latest';
+}
+
+export function removeCommand(manager: PackageManager): string {
+  if (manager === 'npm') return 'npm uninstall <pkg>';
+  if (manager === 'pnpm') return 'pnpm remove <pkg>';
+  if (manager === 'yarn') return 'yarn remove <pkg>';
+  return 'bun remove <pkg>';
+}
+
+export function installCommand(manager: PackageManager): string {
+  return `${manager} install`;
+}
 
 export function formatTime(iso: string): string {
   const date = new Date(iso);

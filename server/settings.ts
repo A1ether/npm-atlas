@@ -36,6 +36,7 @@ export const ATLAS_PATHS = {
   wrapperNpm: path.join(stateDir, 'bin', NPM_BIN),
   wrapperNpx: path.join(stateDir, 'bin', NPX_BIN),
   stateFile: path.join(stateDir, 'state.json'),
+  projectsFile: path.join(stateDir, 'projects.json'),
 };
 
 export interface StoredDefaultState {

@@ -1,25 +1,42 @@
-import { Moon, RefreshCw, Sun } from 'lucide-react';
+import { FolderTree, Globe, Moon, RefreshCw, Sun } from 'lucide-react';
 import { formatDuration, formatTime } from '../lib';
 
+export type AppView = 'global' | 'projects';
+
 interface HeaderProps {
+  view: AppView;
   theme: 'dark' | 'light';
   scannedAt: string | null;
   durationMs: number | null;
   refreshing: boolean;
   disabled: boolean;
+  stampLabel?: string;
   onToggleTheme: () => void;
+  onChangeView: (view: AppView) => void;
   onRefresh: () => void;
 }
 
 export function Header({
+  view,
   theme,
   scannedAt,
   durationMs,
   refreshing,
   disabled,
+  stampLabel = '扫描于',
   onToggleTheme,
+  onChangeView,
   onRefresh,
 }: HeaderProps) {
+  const refreshLabel =
+    view === 'projects'
+      ? refreshing
+        ? '读取中'
+        : '重新读取'
+      : refreshing
+        ? '扫描中'
+        : '重新扫描';
+
   return (
     <header className="topbar">
       <div className="topbar-inner">
@@ -42,14 +59,41 @@ export function Header({
             <div className="brand-name">
               npm<span>-</span>atlas
             </div>
-            <div className="brand-sub">本机 npm 全景 · 全局包管理</div>
+            <div className="brand-sub">
+              {view === 'projects'
+                ? '项目级依赖 · 扫描、导入与管理'
+                : '本机 npm 全景 · 全局与项目依赖'}
+            </div>
           </div>
         </div>
+
+        <nav className="view-switch" role="tablist" aria-label="管理视图">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'global'}
+            className={`view-tab${view === 'global' ? ' is-active' : ''}`}
+            onClick={() => onChangeView('global')}
+          >
+            <Globe size={14} />
+            全局包
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'projects'}
+            className={`view-tab${view === 'projects' ? ' is-active' : ''}`}
+            onClick={() => onChangeView('projects')}
+          >
+            <FolderTree size={14} />
+            项目
+          </button>
+        </nav>
 
         <div className="topbar-actions">
           {scannedAt ? (
             <span className="scan-stamp">
-              扫描于 {formatTime(scannedAt)}
+              {stampLabel} {formatTime(scannedAt)}
               {durationMs ? ` · ${formatDuration(durationMs)}` : ''}
             </span>
           ) : null}
@@ -69,7 +113,7 @@ export function Header({
             disabled={refreshing || disabled}
           >
             <RefreshCw size={14} className={refreshing ? 'spin' : undefined} />
-            {refreshing ? '扫描中' : '重新扫描'}
+            {refreshLabel}
           </button>
         </div>
       </div>

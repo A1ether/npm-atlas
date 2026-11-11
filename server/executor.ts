@@ -8,6 +8,8 @@ import type {
 } from '../shared/types';
 import { runCommand } from './run';
 import { getScan, invalidateScan } from './scanner';
+import { withLock } from './async';
+import { HttpError } from './http';
 
 const HOME = homedir();
 const IS_WINDOWS = process.platform === 'win32';
@@ -16,33 +18,6 @@ const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i;
 const MAX_PACKAGES_PER_ACTION = 50;
 const ACTION_TIMEOUT_MS = 5 * 60_000;
 const MAX_OUTPUT_CHARS = 4_000;
-
-export class HttpError extends Error {
-  status: 400 | 500;
-
-  constructor(status: 400 | 500, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
-const tails = new Map<string, Promise<unknown>>();
-
-async function withLock<T>(key: string, task: () => Promise<T>): Promise<T> {
-  const previous = tails.get(key) ?? Promise.resolve();
-  const current = previous.then(task, task);
-  const tail = current.then(
-    () => undefined,
-    () => undefined,
-  );
-  tails.set(key, tail);
-
-  try {
-    return await current;
-  } finally {
-    if (tails.get(key) === tail) tails.delete(key);
-  }
-}
 
 function envFor(npmPath: string): NodeJS.ProcessEnv {
   return {

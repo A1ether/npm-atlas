@@ -5,10 +5,20 @@ import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
-import type { ActionRequest } from '../shared/types';
+import type { ActionRequest, ProjectActionRequest } from '../shared/types';
 import { resetDefaultNpm, setDefaultNpm } from './defaultNpm';
-import { executeAction, HttpError } from './executor';
+import { executeAction } from './executor';
+import { executeProjectAction } from './projectExecutor';
+import {
+  discoverProjects,
+  getProjectRoots,
+  getProjects,
+  importProjects,
+  refreshProject,
+  removeProjects,
+} from './projects';
 import { getScan } from './scanner';
+import { HttpError } from './http';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webDist = process.env.ATLAS_WEB_DIST
@@ -65,6 +75,51 @@ app.get('/api/scan', async (c) => {
 });
 
 app.post('/api/scan', async (c) => c.json(await getScan(true)));
+
+app.get('/api/projects', async (c) =>
+  c.json(await getProjects(c.req.query('refresh') === '1')),
+);
+
+app.get('/api/projects/roots', async (c) => c.json(await getProjectRoots()));
+
+app.post('/api/projects/discover', async (c) => {
+  const body = await c.req.json<{ root?: string; depth?: number }>();
+  return c.json(await discoverProjects(body.root, body.depth));
+});
+
+app.post('/api/projects/import', async (c) => {
+  const body = await c.req.json<{ paths?: string[] }>();
+  return c.json(
+    await importProjects(Array.isArray(body.paths) ? body.paths : []),
+  );
+});
+
+app.post('/api/projects/remove', async (c) => {
+  const body = await c.req.json<{ ids?: string[] }>();
+  if (!Array.isArray(body.ids)) throw new HttpError(400, '缺少 ids');
+  return c.json(await removeProjects(body.ids));
+});
+
+app.post('/api/projects/refresh', async (c) => {
+  const body = await c.req
+    .json<{ id?: string }>()
+    .catch(() => ({ id: undefined }));
+  return c.json(
+    body.id ? await refreshProject(body.id) : await getProjects(true),
+  );
+});
+
+app.post('/api/projects/action', async (c) => {
+  const body = await c.req.json<ProjectActionRequest>();
+  return c.json(
+    await executeProjectAction({
+      type: body.type,
+      projectId: body.projectId,
+      packages: Array.isArray(body.packages) ? body.packages : [],
+      dev: body.dev === true,
+    }),
+  );
+});
 
 app.post('/api/action', async (c) => {
   const body = await c.req.json<ActionRequest>();

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  FolderPlus,
   Loader2,
   RefreshCw,
   RotateCcw,
@@ -10,24 +11,40 @@ import type {
   ActionType,
   GlobalPackage,
   NpmInstallation,
+  ProjectActionType,
+  ProjectImportResponse,
+  ProjectInfo,
+  ProjectListResult,
+  ProjectPackage,
   ScanResult,
 } from '../../shared/types';
 import {
   applyDefaultNpm,
+  fetchProjects,
   fetchScan,
   postAction,
+  postProjectAction,
+  refreshProject as refreshProjectRequest,
+  removeProjects as removeProjectsRequest,
   resetDefaultNpm as resetDefaultRequest,
 } from './api';
-import { Header } from './components/Header';
+import { Header, type AppView } from './components/Header';
 import { Stats } from './components/Stats';
 import { InstallationList } from './components/InstallationList';
 import { PackagePanel } from './components/PackagePanel';
+import { AddDependencyDialog } from './components/AddDependencyDialog';
+import { ImportProjectsDialog } from './components/ImportProjectsDialog';
+import { ProjectList } from './components/ProjectList';
+import { ProjectPanel } from './components/ProjectPanel';
+import { ProjectStats } from './components/ProjectStats';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Toasts, type ToastItem } from './components/Toasts';
 import { groupInstallations } from './groups';
-import { errorMessage, SOURCE_LABEL } from './lib';
+import { addCommand, errorMessage, installCommand, removeCommand, SOURCE_LABEL } from './lib';
 
 type Theme = 'dark' | 'light';
+
+const COLLAPSE_STORAGE_KEY = 'npm-atlas-collapse-mode';
 
 type ConfirmState =
   | { kind: 'uninstall'; pkg: GlobalPackage }
@@ -39,6 +56,23 @@ type ConfirmState =
 interface BusyState {
   installationId: string;
   action: ActionType;
+  names: string[];
+}
+
+type ProjectConfirmState =
+  | {
+      kind: 'update';
+      project: ProjectInfo;
+      packages: ProjectPackage[];
+    }
+  | { kind: 'uninstall'; project: ProjectInfo; pkg: ProjectPackage }
+  | { kind: 'remove-project'; project: ProjectInfo }
+  | { kind: 'install-all'; project: ProjectInfo }
+  | null;
+
+interface ProjectBusyState {
+  projectId: string;
+  action: ProjectActionType | 'remove';
   names: string[];
 }
 
@@ -54,9 +88,9 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [collapseByRoot, setCollapseByRoot] = useState(() => {
     try {
-      return localStorage.getItem('npm-atlas-collapse') === '1';
+      return localStorage.getItem(COLLAPSE_STORAGE_KEY) !== 'expanded';
     } catch {
-      return false;
+      return true;
     }
   });
   const [loading, setLoading] = useState(true);
@@ -66,9 +100,42 @@ export function App() {
   const [confirm, setConfirm] = useState<ConfirmState>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [switchingDefault, setSwitchingDefault] = useState(false);
+  const [view, setView] = useState<AppView>(() => {
+    try {
+      return localStorage.getItem('npm-atlas-view') === 'projects'
+        ? 'projects'
+        : 'global';
+    } catch {
+      return 'global';
+    }
+  });
+  const [projects, setProjects] = useState<ProjectListResult | null>(null);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [projectsRefreshing, setProjectsRefreshing] = useState(false);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    () => {
+      try {
+        return localStorage.getItem('npm-atlas-project');
+      } catch {
+        return null;
+      }
+    },
+  );
+  const [projectBusy, setProjectBusy] = useState<ProjectBusyState | null>(null);
+  const [projectConfirm, setProjectConfirm] =
+    useState<ProjectConfirmState>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [addDependencyOpen, setAddDependencyOpen] = useState(false);
+  const [projectRefreshingId, setProjectRefreshingId] = useState<string | null>(
+    null,
+  );
   const toastId = useRef(0);
   const actionInFlight = useRef(false);
   const defaultInFlight = useRef(false);
+  const projectActionInFlight = useRef(false);
+  const projectLoadInFlight = useRef(false);
+  const projectRefreshInFlight = useRef(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -81,11 +148,32 @@ export function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem('npm-atlas-collapse', collapseByRoot ? '1' : '0');
+      localStorage.setItem(
+        COLLAPSE_STORAGE_KEY,
+        collapseByRoot ? 'collapsed' : 'expanded',
+      );
     } catch {
       // preference is optional; the view still works without persistence
     }
   }, [collapseByRoot]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('npm-atlas-view', view);
+    } catch {
+      // preference is optional
+    }
+  }, [view]);
+
+  useEffect(() => {
+    try {
+      if (selectedProjectId) {
+        localStorage.setItem('npm-atlas-project', selectedProjectId);
+      }
+    } catch {
+      // preference is optional
+    }
+  }, [selectedProjectId]);
 
   const pushToast = (
     kind: ToastItem['kind'],
@@ -129,6 +217,40 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const loadProjects = async (refresh: boolean) => {
+    if (projectLoadInFlight.current) return;
+    projectLoadInFlight.current = true;
+    if (refresh) setProjectsRefreshing(true);
+    else setProjectsLoading(true);
+    setProjectsError(null);
+
+    try {
+      const data = await fetchProjects(refresh);
+      setProjects(data);
+      setSelectedProjectId((previous) => {
+        if (previous && data.projects.some((project) => project.id === previous)) {
+          return previous;
+        }
+        return data.projects[0]?.id ?? null;
+      });
+    } catch (cause) {
+      const message = errorMessage(cause);
+      setProjectsError(message);
+      if (projects) pushToast('error', '读取项目失败', message);
+    } finally {
+      projectLoadInFlight.current = false;
+      setProjectsLoading(false);
+      setProjectsRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (view === 'projects' && !projects && !projectsError) {
+      void loadProjects(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
   const groups = useMemo(
     () => (scan ? groupInstallations(scan.installations, collapseByRoot) : []),
     [scan, collapseByRoot],
@@ -147,7 +269,8 @@ export function App() {
       !target ||
       !names.length ||
       actionInFlight.current ||
-      defaultInFlight.current
+      defaultInFlight.current ||
+      projectActionInFlight.current
     ) {
       return;
     }
@@ -201,7 +324,13 @@ export function App() {
   };
 
   const changeDefault = async (installation: NpmInstallation) => {
-    if (actionInFlight.current || defaultInFlight.current) return;
+    if (
+      actionInFlight.current ||
+      defaultInFlight.current ||
+      projectActionInFlight.current
+    ) {
+      return;
+    }
     defaultInFlight.current = true;
     setConfirm(null);
     setSwitchingDefault(true);
@@ -228,7 +357,13 @@ export function App() {
   };
 
   const removeDefault = async () => {
-    if (actionInFlight.current || defaultInFlight.current) return;
+    if (
+      actionInFlight.current ||
+      defaultInFlight.current ||
+      projectActionInFlight.current
+    ) {
+      return;
+    }
     defaultInFlight.current = true;
     setConfirm(null);
     setSwitchingDefault(true);
@@ -254,78 +389,302 @@ export function App() {
     }
   };
 
+  const runProjectAction = async (
+    action: ProjectActionType,
+    project: ProjectInfo,
+    names: string[],
+    dev?: boolean,
+  ) => {
+    if (
+      projectActionInFlight.current ||
+      actionInFlight.current ||
+      defaultInFlight.current ||
+      projectsRefreshing ||
+      projectRefreshingId !== null
+    ) {
+      return;
+    }
+    if (!names.length && action !== 'install-all') return;
+
+    projectActionInFlight.current = true;
+    setProjectConfirm(null);
+    setAddDependencyOpen(false);
+    setProjectBusy({ projectId: project.id, action, names });
+
+    const verb =
+      action === 'update'
+        ? '更新'
+        : action === 'uninstall'
+          ? '移除'
+          : action === 'install'
+            ? '添加'
+            : '';
+
+    try {
+      const response = await postProjectAction({
+        type: action,
+        projectId: project.id,
+        packages: names,
+        dev,
+      });
+      setProjects(response.list);
+      setSelectedProjectId(project.id);
+      setProjectsError(null);
+
+      const failed = response.results.filter((result) => !result.ok);
+      const succeeded = response.results.length - failed.length;
+
+      if (failed.length) {
+        pushToast(
+          'error',
+          action === 'install-all'
+            ? '项目依赖安装失败'
+            : `${failed.length} 个依赖${verb}失败`,
+          failed
+            .map((result) => `${result.name}\n${result.output}`)
+            .join('\n\n'),
+        );
+        if (succeeded) {
+          pushToast(
+            'success',
+            action === 'install-all'
+              ? '依赖安装部分完成'
+              : `其余 ${succeeded} 个依赖已${verb}`,
+          );
+        }
+      } else {
+        pushToast(
+          'success',
+          action === 'install-all'
+            ? '项目依赖安装完成'
+            : `${names.length} 个依赖已${verb}`,
+          action === 'update'
+            ? 'package.json 与锁文件已刷新。'
+            : action === 'uninstall'
+              ? '依赖已从项目与锁文件中移除。'
+              : action === 'install'
+                ? '依赖已写入 package.json。'
+                : 'node_modules 已就绪。',
+        );
+      }
+    } catch (cause) {
+      pushToast('error', '项目操作失败', errorMessage(cause));
+    } finally {
+      projectActionInFlight.current = false;
+      setProjectBusy(null);
+    }
+  };
+
+  const refreshProjectData = async (project: ProjectInfo) => {
+    if (
+      projectRefreshInFlight.current ||
+      projectBusy ||
+      busy ||
+      switchingDefault
+    ) {
+      return;
+    }
+
+    projectRefreshInFlight.current = true;
+    setProjectRefreshingId(project.id);
+    try {
+      const list = await refreshProjectRequest(project.id);
+      setProjects(list);
+      setProjectsError(null);
+      setSelectedProjectId((previous) =>
+        previous && list.projects.some((entry) => entry.id === previous)
+          ? previous
+          : project.id,
+      );
+    } catch (cause) {
+      pushToast('error', '重新读取失败', errorMessage(cause));
+    } finally {
+      projectRefreshInFlight.current = false;
+      setProjectRefreshingId(null);
+    }
+  };
+
+  const removeProject = async (project: ProjectInfo) => {
+    if (
+      projectActionInFlight.current ||
+      actionInFlight.current ||
+      defaultInFlight.current ||
+      projectsRefreshing ||
+      projectRefreshingId !== null
+    ) {
+      return;
+    }
+
+    const previousIndex =
+      projects?.projects.findIndex((entry) => entry.id === project.id) ?? -1;
+
+    projectActionInFlight.current = true;
+    setProjectConfirm(null);
+    setProjectBusy({ projectId: project.id, action: 'remove', names: [] });
+
+    try {
+      const list = await removeProjectsRequest([project.id]);
+      setProjects(list);
+      setProjectsError(null);
+      const nextIndex = Math.min(
+        Math.max(previousIndex, 0),
+        Math.max(list.projects.length - 1, 0),
+      );
+      setSelectedProjectId(list.projects[nextIndex]?.id ?? null);
+      pushToast('success', '项目已移除', '仅从 npm-atlas 移除记录，未改动磁盘文件。');
+    } catch (cause) {
+      pushToast('error', '移除项目失败', errorMessage(cause));
+    } finally {
+      projectActionInFlight.current = false;
+      setProjectBusy(null);
+    }
+  };
+
+  const handleImported = (result: ProjectImportResponse) => {
+    setProjects(result.list);
+    setProjectsError(null);
+    setImportOpen(false);
+    if (result.imported.length) {
+      setSelectedProjectId(result.imported[0]);
+      pushToast(
+        'success',
+        `已导入 ${result.imported.length} 个项目`,
+        `当前共 ${result.list.projects.length} 个项目。`,
+      );
+    } else {
+      pushToast('info', '所选项目都已导入', '可以直接在左侧选择查看。');
+    }
+  };
+
+  const changeView = (next: AppView) => {
+    setView(next);
+    if (next === 'projects' && !projects && !projectsError) {
+      void loadProjects(false);
+    }
+  };
+
+  const openImport = () => {
+    if (projectsRefreshing || projectBusy || busy || switchingDefault) return;
+    setImportOpen(true);
+  };
+
   const toggleTheme = () => {
     setTheme((previous) => (previous === 'dark' ? 'light' : 'dark'));
   };
 
-  if (!scan && loading) {
-    return (
-      <div className="boot">
-        <div className="boot-card">
-          <div className="boot-title">
-            <Loader2 size={17} className="spin" style={{ color: 'var(--accent)' }} />
-            正在扫描本机 npm…
-          </div>
-          <div className="boot-note">
-            逐个探测 PATH、mise、nvm、Homebrew 等安装，并读取全局包与可更新版本。
-            首次扫描通常需要几秒。
-          </div>
-          <div style={{ display: 'grid', gap: 8, marginTop: 18 }}>
-            {[0, 1, 2, 3].map((row) => (
-              <div
-                key={row}
-                className="skeleton-row"
-                style={{ opacity: 1 - row * 0.18 }}
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!scan && error) {
-    return (
-      <div className="boot">
-        <div className="boot-card">
-          <div className="boot-title">
-            <AlertTriangle size={18} style={{ color: 'var(--danger)' }} />
-            扫描失败
-          </div>
-          <div className="boot-note">{error}</div>
-          <div style={{ marginTop: 16 }}>
-            <button type="button" className="btn btn-primary" onClick={() => void load(true)}>
-              <RefreshCw size={14} />
-              重试
-            </button>
+  if (view === 'global' && !scan) {
+    if (loading) {
+      return (
+        <div className="boot">
+          <div className="boot-card">
+            <div className="boot-title">
+              <Loader2 size={17} className="spin" style={{ color: 'var(--accent)' }} />
+              正在扫描本机 npm…
+            </div>
+            <div className="boot-note">
+              逐个探测 PATH、mise、nvm、Homebrew 等安装，并读取全局包与可更新版本。
+              首次扫描通常需要几秒。
+            </div>
+            <div style={{ display: 'grid', gap: 8, marginTop: 18 }}>
+              {[0, 1, 2, 3].map((row) => (
+                <div
+                  key={row}
+                  className="skeleton-row"
+                  style={{ opacity: 1 - row * 0.18 }}
+                />
+              ))}
+            </div>
           </div>
         </div>
-      </div>
-    );
-  }
+      );
+    }
 
-  if (!scan) return null;
+    if (error) {
+      return (
+        <div className="boot">
+          <div className="boot-card">
+            <div className="boot-title">
+              <AlertTriangle size={18} style={{ color: 'var(--danger)' }} />
+              扫描失败
+            </div>
+            <div className="boot-note">{error}</div>
+            <div style={{ marginTop: 16 }}>
+              <button type="button" className="btn btn-primary" onClick={() => void load(true)}>
+                <RefreshCw size={14} />
+                重试
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return null;
+  }
 
   const selectedBusy =
     busy && selectedGroup && busy.installationId === selectedGroup.manager.id
       ? { action: busy.action, names: busy.names }
       : null;
   const blockedByOtherAction = Boolean(busy) && !selectedBusy;
-  const actionsBlocked = blockedByOtherAction || switchingDefault;
+  const anyBusy =
+    Boolean(busy) ||
+    Boolean(projectBusy) ||
+    switchingDefault ||
+    projectRefreshingId !== null;
+  const actionsBlocked =
+    blockedByOtherAction || switchingDefault || Boolean(projectBusy);
+
+  const selectedProject =
+    projects?.projects.find((project) => project.id === selectedProjectId) ??
+    projects?.projects[0] ??
+    null;
+  const projectBusyHere = Boolean(
+    projectBusy &&
+      selectedProject &&
+      projectBusy.projectId === selectedProject.id,
+  );
+  const projectBlocked =
+    (Boolean(projectBusy) && !projectBusyHere) ||
+    Boolean(busy) ||
+    switchingDefault ||
+    projectsRefreshing;
+  const projectBlockedReason = switchingDefault
+    ? '正在切换默认 npm，请稍候…'
+    : busy
+      ? '全局包操作正在进行，完成前暂不能提交新的项目操作。'
+      : projectsRefreshing
+        ? '正在重新读取项目列表，请稍候…'
+        : projectBusy && !projectBusyHere
+          ? '另一个项目正在执行操作，完成前暂不能提交新的项目操作。'
+          : undefined;
+
+  const headerScannedAt =
+    view === 'global' ? scan?.scannedAt ?? null : projects?.scannedAt ?? null;
+  const headerDuration =
+    view === 'global' ? scan?.durationMs ?? null : projects?.durationMs ?? null;
 
   return (
     <div>
       <Header
+        view={view}
         theme={theme}
-        scannedAt={scan.scannedAt}
-        durationMs={scan.durationMs}
-        refreshing={refreshing}
-        disabled={Boolean(busy) || switchingDefault}
+        scannedAt={headerScannedAt}
+        durationMs={headerDuration}
+        refreshing={view === 'global' ? refreshing : projectsRefreshing}
+        disabled={anyBusy}
+        stampLabel={view === 'projects' ? '读取于' : '扫描于'}
         onToggleTheme={toggleTheme}
-        onRefresh={() => void load(true)}
+        onChangeView={changeView}
+        onRefresh={() => {
+          if (view === 'global') void load(true);
+          else void loadProjects(true);
+        }}
       />
 
       <main className="app-main">
+        {view === 'global' && scan ? (
+          <>
         {scan.defaultState.configured ? (
           <div
             className={`default-banner${scan.defaultState.targetAvailable ? '' : ' warn'}`}
@@ -352,9 +711,15 @@ export function App() {
             <button
               type="button"
               className="btn btn-quiet default-banner-action"
-              disabled={switchingDefault || Boolean(busy)}
+              disabled={switchingDefault || Boolean(busy) || Boolean(projectBusy)}
               onClick={() => {
-                if (actionInFlight.current || defaultInFlight.current) return;
+                if (
+                  actionInFlight.current ||
+                  defaultInFlight.current ||
+                  projectActionInFlight.current
+                ) {
+                  return;
+                }
                 setConfirm({ kind: 'reset-default' });
               }}
             >
@@ -394,22 +759,48 @@ export function App() {
                 blockedReason={
                   switchingDefault
                     ? '正在切换默认 npm，请稍候…'
-                    : '另一个 npm 安装正在执行操作，完成前暂不能提交新的更新或卸载。'
+                    : projectBusy
+                      ? '项目操作正在进行，完成前暂不能提交新的全局包操作。'
+                      : '另一个 npm 安装正在执行操作，完成前暂不能提交新的更新或卸载。'
                 }
                 onSetDefault={(installation) => {
-                  if (actionInFlight.current || defaultInFlight.current) return;
+                  if (
+                    actionInFlight.current ||
+                    defaultInFlight.current ||
+                    projectActionInFlight.current
+                  ) {
+                    return;
+                  }
                   setConfirm({ kind: 'set-default', installation });
                 }}
                 onUpdate={(name) => {
-                  if (actionInFlight.current || defaultInFlight.current) return;
+                  if (
+                    actionInFlight.current ||
+                    defaultInFlight.current ||
+                    projectActionInFlight.current
+                  ) {
+                    return;
+                  }
                   void runAction('update', [name]);
                 }}
                 onUninstall={(pkg) => {
-                  if (actionInFlight.current || defaultInFlight.current) return;
+                  if (
+                    actionInFlight.current ||
+                    defaultInFlight.current ||
+                    projectActionInFlight.current
+                  ) {
+                    return;
+                  }
                   setConfirm({ kind: 'uninstall', pkg });
                 }}
                 onUpdateAll={(names) => {
-                  if (actionInFlight.current || defaultInFlight.current) return;
+                  if (
+                    actionInFlight.current ||
+                    defaultInFlight.current ||
+                    projectActionInFlight.current
+                  ) {
+                    return;
+                  }
                   setConfirm({ kind: 'update-all', names });
                 }}
               />
@@ -437,8 +828,167 @@ export function App() {
             </div>
           </section>
         )}
+          </>
+        ) : view === 'projects' ? (
+          <>
+            {projectsLoading && !projects ? (
+              <section className="panel" style={{ marginTop: 18 }}>
+                <div className="empty-state">
+                  <div className="empty-title">
+                    <Loader2
+                      size={16}
+                      className="spin"
+                      style={{ color: 'var(--accent)' }}
+                    />
+                    正在读取项目依赖…
+                  </div>
+                  <div className="empty-note">
+                    读取 package.json、node_modules 与可更新版本。首次读取可能需要几秒。
+                  </div>
+                </div>
+              </section>
+            ) : projectsError && !projects ? (
+              <section className="panel" style={{ marginTop: 18 }}>
+                <div className="empty-state">
+                  <div className="empty-icon">
+                    <AlertTriangle size={22} />
+                  </div>
+                  <div className="empty-title">读取项目失败</div>
+                  <div className="empty-note">{projectsError}</div>
+                  <div className="empty-actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => void loadProjects(true)}
+                    >
+                      <RefreshCw size={14} />
+                      重试
+                    </button>
+                  </div>
+                </div>
+              </section>
+            ) : projects ? (
+              projects.projects.length ? (
+                <>
+                  <ProjectStats list={projects} />
+
+                  {projectsError ? (
+                    <div className="error-banner" role="alert">
+                      <AlertTriangle size={14} />
+                      <span>刷新失败：{projectsError}</span>
+                      <button
+                        type="button"
+                        className="btn btn-quiet"
+                        onClick={() => void loadProjects(true)}
+                      >
+                        重试
+                      </button>
+                    </div>
+                  ) : null}
+
+                  <div className="workspace">
+                    <ProjectList
+                      projects={projects.projects}
+                      selectedProjectId={selectedProject?.id ?? null}
+                      onSelect={(project) => setSelectedProjectId(project.id)}
+                      onImport={openImport}
+                    />
+
+                    {selectedProject ? (
+                      <ProjectPanel
+                        project={selectedProject}
+                        busy={
+                          projectBusy &&
+                          projectBusy.projectId === selectedProject.id
+                            ? {
+                                action: projectBusy.action,
+                                names: projectBusy.names,
+                              }
+                            : null
+                        }
+                        refreshing={projectRefreshingId === selectedProject.id}
+                        blocked={projectBlocked}
+                        blockedReason={projectBlockedReason}
+                        onAdd={() => setAddDependencyOpen(true)}
+                        onRefresh={() => void refreshProjectData(selectedProject)}
+                        onRemove={() => {
+                          if (projectActionInFlight.current) return;
+                          setProjectConfirm({
+                            kind: 'remove-project',
+                            project: selectedProject,
+                          });
+                        }}
+                        onUpdate={(pkg) => {
+                          if (projectActionInFlight.current) return;
+                          setProjectConfirm({
+                            kind: 'update',
+                            project: selectedProject,
+                            packages: [pkg],
+                          });
+                        }}
+                        onUninstall={(pkg) => {
+                          if (projectActionInFlight.current) return;
+                          setProjectConfirm({
+                            kind: 'uninstall',
+                            project: selectedProject,
+                            pkg,
+                          });
+                        }}
+                        onUpdateAll={(packages) => {
+                          if (projectActionInFlight.current) return;
+                          setProjectConfirm({
+                            kind: 'update',
+                            project: selectedProject,
+                            packages,
+                          });
+                        }}
+                        onInstallAll={() => {
+                          if (projectActionInFlight.current) return;
+                          setProjectConfirm({
+                            kind: 'install-all',
+                            project: selectedProject,
+                          });
+                        }}
+                      />
+                    ) : (
+                      <section className="panel">
+                        <div className="empty-state">
+                          <div className="empty-title">请选择一个项目</div>
+                        </div>
+                      </section>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <section className="panel" style={{ marginTop: 18 }}>
+                  <div className="empty-state">
+                    <div className="empty-icon">
+                      <FolderPlus size={22} />
+                    </div>
+                    <div className="empty-title">还没有导入项目</div>
+                    <div className="empty-note">
+                      扫描一个目录，导入包含 package.json 的项目后，就能在这里读取依赖、更新版本和移除依赖。
+                    </div>
+                    <div className="empty-actions">
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={openImport}
+                      >
+                        <FolderPlus size={14} />
+                        导入项目
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              )
+            ) : null}
+          </>
+        ) : null}
       </main>
 
+      {view === 'global' && scan ? (
+        <>
       <ConfirmDialog
         open={confirm?.kind === 'uninstall'}
         title="卸载全局包"
@@ -564,6 +1114,159 @@ export function App() {
             重新由系统 PATH 决定。
           </>
         }
+      />
+        </>
+      ) : null}
+
+      {view === 'projects' ? (
+        <>
+          <ConfirmDialog
+            open={projectConfirm?.kind === 'update'}
+            title={
+              projectConfirm?.kind === 'update' &&
+              projectConfirm.packages.length > 1
+                ? '批量更新项目依赖'
+                : '更新项目依赖'
+            }
+            confirmLabel="开始更新"
+            onCancel={() => setProjectConfirm(null)}
+            onConfirm={() => {
+              if (projectConfirm?.kind === 'update') {
+                void runProjectAction(
+                  'update',
+                  projectConfirm.project,
+                  projectConfirm.packages.map((pkg) => pkg.name),
+                );
+              }
+            }}
+            body={
+              projectConfirm?.kind === 'update' ? (
+                <>
+                  将通过{' '}
+                  <code>
+                    {addCommand(projectConfirm.project.packageManager)}
+                  </code>{' '}
+                  把以下依赖更新到最新版本，并改写 package.json 中的版本范围与锁文件。
+                  <div className="dialog-list">
+                    {projectConfirm.packages.map((pkg) => (
+                      <div key={pkg.name}>
+                        {pkg.name} · {pkg.installed ?? pkg.range} →{' '}
+                        {pkg.latest ?? 'latest'}
+                        {pkg.major ? ' · 跨主版本' : ''}
+                      </div>
+                    ))}
+                  </div>
+                  {projectConfirm.packages.some((pkg) => pkg.major) ? (
+                    <div className="dialog-note">
+                      其中包含跨主版本更新，请先确认项目代码兼容。
+                    </div>
+                  ) : null}
+                </>
+              ) : null
+            }
+          />
+
+          <ConfirmDialog
+            open={projectConfirm?.kind === 'uninstall'}
+            title="移除项目依赖"
+            danger
+            confirmLabel="确认移除"
+            onCancel={() => setProjectConfirm(null)}
+            onConfirm={() => {
+              if (projectConfirm?.kind === 'uninstall') {
+                void runProjectAction(
+                  'uninstall',
+                  projectConfirm.project,
+                  [projectConfirm.pkg.name],
+                );
+              }
+            }}
+            body={
+              projectConfirm?.kind === 'uninstall' ? (
+                <>
+                  将从{' '}
+                  <code>{projectConfirm.project.displayPath}</code> 的
+                  package.json 中移除 <code>{projectConfirm.pkg.name}</code>
+                  {projectConfirm.pkg.installed
+                    ? `（${projectConfirm.pkg.installed}）`
+                    : ''}
+                  ，并执行{' '}
+                  <code>
+                    {removeCommand(projectConfirm.project.packageManager)}
+                  </code>
+                  。锁文件与 node_modules 会同步更新。
+                </>
+              ) : null
+            }
+          />
+
+          <ConfirmDialog
+            open={projectConfirm?.kind === 'remove-project'}
+            title="移除项目"
+            danger
+            confirmLabel="确认移除"
+            onCancel={() => setProjectConfirm(null)}
+            onConfirm={() => {
+              if (projectConfirm?.kind === 'remove-project') {
+                void removeProject(projectConfirm.project);
+              }
+            }}
+            body={
+              projectConfirm?.kind === 'remove-project' ? (
+                <>
+                  将把{' '}
+                  <code>{projectConfirm.project.displayPath}</code> 从
+                  npm-atlas 的项目列表中移除。不会删除项目文件、package.json 或
+                  node_modules，之后可以重新导入。
+                </>
+              ) : null
+            }
+          />
+
+          <ConfirmDialog
+            open={projectConfirm?.kind === 'install-all'}
+            title="安装项目依赖"
+            confirmLabel="开始安装"
+            onCancel={() => setProjectConfirm(null)}
+            onConfirm={() => {
+              if (projectConfirm?.kind === 'install-all') {
+                void runProjectAction(
+                  'install-all',
+                  projectConfirm.project,
+                  [],
+                );
+              }
+            }}
+            body={
+              projectConfirm?.kind === 'install-all' ? (
+                <>
+                  将在 <code>{projectConfirm.project.displayPath}</code> 执行{' '}
+                  <code>
+                    {installCommand(projectConfirm.project.packageManager)}
+                  </code>
+                  ，安装 package.json 中的全部依赖并生成或更新锁文件。依赖的安装脚本可能会运行。
+                </>
+              ) : null
+            }
+          />
+        </>
+      ) : null}
+
+      <ImportProjectsDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={handleImported}
+      />
+
+      <AddDependencyDialog
+        open={addDependencyOpen && Boolean(selectedProject)}
+        project={selectedProject}
+        onCancel={() => setAddDependencyOpen(false)}
+        onSubmit={(names, dev) => {
+          if (selectedProject) {
+            void runProjectAction('install', selectedProject, names, dev);
+          }
+        }}
       />
 
       <Toasts

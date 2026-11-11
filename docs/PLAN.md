@@ -1,7 +1,7 @@
 # npm-atlas 方案文档
 
 > 本机 npm 全景扫描与可视化管理工具
-> 版本：v0.1 方案 / 2026-11-10
+> 版本：v0.2 方案 / 2026-11-11（补充项目级管理）
 
 ## 1. 调研结论（GitHub CLI 实查）
 
@@ -208,3 +208,92 @@ npm-atlas/
 ## 9. 命名
 
 仓库 / npm 包名：**npm-atlas**（已确认 npm registry 与 GitHub 账号下均未被占用）。
+
+## 10. 项目级管理（v0.2）
+
+### 10.1 目标
+
+在全局包管理之外，支持：
+
+1. 扫描指定目录，发现包含 `package.json` 的 Node 项目，批量导入；
+2. 读取每个项目的包管理器、锁文件、依赖清单、已安装版本与可更新状态；
+3. 按项目使用的包管理器执行依赖更新、添加、移除与安装。
+
+项目列表持久化在 `~/.npm-atlas/projects.json`，只记录规范化后的绝对路径与导入时间。
+
+### 10.2 数据模型
+
+```ts
+ProjectInfo {
+  id, path, displayPath, name, version, description, isPrivate,
+  packageManager, packageManagerSource, lockfile,
+  hasNodeModules, hasWorkspaces,
+  packages[], packageCount, outdatedCount, linkedCount,
+  addedAt, scannedAt, missing?, warning?, error?
+}
+
+ProjectPackage {
+  name, range, type: 'prod'|'dev'|'optional'|'peer',
+  installed, latest, outdated, linked, major
+}
+```
+
+`linked` 表示 `workspace:`、`file:`、`link:`、`portal:`、`patch:`、`catalog:`、`npm:` 别名、git / http 地址等规格；这些依赖不会通过安装命令更新。
+
+### 10.3 扫描与导入
+
+- 目录支持 `~` 展开，必须是存在的绝对路径；拒绝 `/` 与系统目录。
+- 广度优先遍历，默认向下 3 层（1–6 可调），跳过隐藏目录、`node_modules`、`.git`、构建产物、缓存、虚拟环境与部分系统目录；不跟随符号链接。
+- 上限：8000 个目录 / 300 个候选；超出标记 `truncated`。
+- 发现 `package.json` 后读取名称、版本、private、依赖数量与包管理器；仍继续向下遍历以覆盖 monorepo 子包。
+- 导入时再次校验路径、目录与 `package.json` 存在，按 realpath 去重；单次最多 100 个。
+
+### 10.4 包管理器识别
+
+1. `package.json` 的 `packageManager` 字段（如 `pnpm@9.0.0`）；
+2. 锁文件优先级：`pnpm-lock.yaml` → `yarn.lock` → `bun.lock` / `bun.lockb` → `package-lock.json` / `npm-shrinkwrap.json`；
+3. `node_modules` 特征：`.pnp.cjs` → yarn、`node_modules/.pnpm` → pnpm、`node_modules/.package-lock.json` → npm；
+4. 兜底 npm。
+
+`workspaces` 字段或 `pnpm-workspace.yaml` 存在时视为 workspace 根，添加 / 移除依赖时使用 `--workspace-root`（pnpm）或 `-W`（yarn）。
+
+### 10.5 依赖读取与可更新
+
+- 依赖来源：`dependencies`、`devDependencies`、`optionalDependencies`、`peerDependencies`，同名以先出现的类型为准。
+- 已安装版本：读取 `node_modules/<name>/package.json`，不存在时使用 `outdated` 命令返回的 `current`。
+- 最新版本：在项目目录执行对应管理器的 `outdated`：
+  - npm / pnpm：`outdated --json`；
+  - yarn：`outdated --json`，解析 NDJSON table 事件，必要时解析表格文本；
+  - bun：解析 `outdated` 表格。
+- 失败回退：非 npm 项目若管理器缺失或无法读取锁文件，回退到 `npm outdated --json`（只读，不写文件）；仍失败时仅展示已安装版本并给出 warning。
+- `outdated = installed && latest && installed !== latest`；跨主版本单独标记 `major`，用于确认提示。
+- 项目级缓存 60 秒；操作后强制重读该项目，手动刷新读取全部。
+
+### 10.6 执行器
+
+| 操作 | npm | pnpm | yarn | bun |
+| --- | --- | --- | --- | --- |
+| 更新 / 添加 | `npm install <pkg>@latest` | `pnpm add <pkg>@latest` | `yarn add <pkg>@latest` | `bun add <pkg>@latest` |
+| 移除 | `npm uninstall <pkg>` | `pnpm remove <pkg>` | `yarn remove <pkg>` | `bun remove <pkg>` |
+| 安装全部 | `npm install` | `pnpm install` | `yarn install` | `bun install` |
+
+- dev / optional 依赖使用对应的保存参数（`--save-dev` / `-D` / `-d`，`--save-optional` / `-O` / `--optional`）。
+- 更新与添加按依赖类型分组，一组执行一次命令；结果按包展开返回。
+- 目标包必须在最新解析出的 `package.json` 中声明；peer 依赖不能更新，`linked` 依赖不能更新或重新添加。
+- 同一项目的操作串行执行；超时 5 分钟；输出截断 4000 字符；完成后重新读取项目。
+- 命令以参数数组执行，不经过 shell；包名使用与全局执行器相同的正则校验。
+
+### 10.7 安全
+
+- 扫描只接受本机请求（沿用 `/api/*` 的本机 Host / Origin 校验），拒绝系统根目录并可限制深度与数量。
+- 导入路径必须 realpath 后仍是目录，且存在 `package.json`；移除记录不触碰磁盘文件。
+- 项目动作只作用于已导入项目；依赖名必须同时通过正则与项目清单校验。
+- 工具不会自动处理跨主版本兼容性，更新前在确认对话框中明确提示；会改写项目 `package.json` 与锁文件。
+
+### 10.8 验收
+
+1. 能从 `~/DevSpace` 扫描出包含 `package.json` 的项目，并跳过 `node_modules` 与构建目录。
+2. npm / pnpm 项目能读取正确的已安装版本与可更新版本；yarn / bun 缺失时给出可读的回退信息。
+3. 导入后重启服务，项目列表仍在；移除记录不影响磁盘文件。
+4. 更新 / 添加 / 移除 / 安装全部依赖分别执行对应包管理器命令，并同步刷新项目数据。
+5. 项目视图在 1440px 与 390px 宽度下可用，深 / 浅色主题与全局视图均无回归。
